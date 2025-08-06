@@ -8,7 +8,9 @@ from datetime import datetime
 @st.cache_data
 def load_data():
     try:
-        return pd.read_csv("dati_pac.csv", parse_dates=["Data"])
+        df = pd.read_csv("dati_pac.csv", parse_dates=["Data"])
+        df.columns = df.columns.str.strip()  # Rimuove eventuali spazi dai nomi colonne
+        return df
     except FileNotFoundError:
         return pd.DataFrame(columns=["Data", "ETF", "Importo", "Prezzo", "Quantità"])
 
