@@ -1,87 +1,89 @@
-import streamlit as st
 import pandas as pd
 import yfinance as yf
-import os
-from datetime import datetime
+import matplotlib.pyplot as plt
+import streamlit as st
 
-# Layout wide e dark
-st.set_page_config(layout="wide", page_title="Dashboard PAC")
+# ✅ Configurazione layout Streamlit
+st.set_page_config(page_title="PAC Dashboard", layout="wide", initial_sidebar_state="expanded")
 
-# === Titolo Principale ===
-st.title("📈 Dashboard PAC")
-
-# === Sezione Prezzi Live ETF ===
-st.subheader("📊 Prezzi Live ETF")
-
-etf_symbols = {
+# ✅ Lista ETF e relativi ticker su Yahoo Finance
+etf_info = {
     "SPDR S&P 500 UCITS ETF": "SPY5L.MI",
     "iShares Core MSCI World UCITS ETF": "SWDA.L",
     "iShares NASDAQ 100 UCITS ETF EUR Hedged": "NSQE.DE"
 }
 
-cols = st.columns(3)
+# ✅ Funzione per ottenere prezzi live da Yahoo Finance
+def get_live_prices(tickers):
+    prices = {}
+    for name, ticker in tickers.items():
+        try:
+            ticker_data = yf.Ticker(ticker)
+            prices[name] = ticker_data.info.get("regularMarketPrice", 0.0)
+        except Exception:
+            prices[name] = 0.0
+    return prices
 
-prezzi_live = {}
-
-for i, (nome, simbolo) in enumerate(etf_symbols.items()):
-    ticker = yf.Ticker(simbolo)
+# ✅ Caricamento operazioni dal file CSV
+def load_data():
     try:
-        prezzo = ticker.history(period="1d")["Close"].iloc[-1]
-    except:
-        prezzo = 0.0
-    prezzi_live[nome] = prezzo
-    with cols[i]:
-        st.metric(label=nome, value=f"{prezzo:.2f} €", delta="Live")
+        df = pd.read_csv("operazioni_pac.csv", parse_dates=["Data"])
+        return df
+    except FileNotFoundError:
+        return pd.DataFrame(columns=["Data", "ETF", "Importo", "Prezzo", "Quantità"])
 
-# === Caricamento dati PAC da CSV ===
-csv_file = "dati_pac.csv"
-if os.path.exists(csv_file):
-    df = pd.read_csv(csv_file)
-else:
-    df = pd.DataFrame(columns=["Data", "ETF", "Importo Versato", "Prezzo Acquisto", "Quantità"])
+# ✅ Caricamento dati
+df = load_data()
+prezzi_live = get_live_prices(etf_info)
 
-# === Calcolo Valore Attuale ===
-df["Valore Attuale"] = df.apply(
-    lambda row: row["Quantità"] * prezzi_live.get(row["ETF"], 0.0), axis=1
-)
-df["Guadagno"] = df["Valore Attuale"] - df["Importo Versato"]
+# ✅ Calcolo valore attuale per ogni riga
+df["Valore Attuale"] = df.apply(lambda row: row["Quantità"] * prezzi_live.get(row["ETF"], 0.0), axis=1)
+df["Importo"] = df["Importo"].astype(float)
+df["Guadagno"] = df["Valore Attuale"] - df["Importo"]
 
-# === KPI ===
-totale_investito = df["Importo Versato"].sum()
+# ✅ KPI principali
+totale_investito = df["Importo"].sum()
 valore_attuale = df["Valore Attuale"].sum()
-guadagno_totale = valore_attuale - totale_investito
+guadagno = valore_attuale - totale_investito
 
-st.markdown("---")
-kpi1, kpi2, kpi3 = st.columns(3)
-kpi1.metric("💰 Totale Investito", f"{totale_investito:.2f} €")
-kpi2.metric("📊 Valore Attuale", f"{valore_attuale:.2f} €")
-kpi3.metric("📈 Guadagno", f"{guadagno_totale:.2f} €")
+# ✅ Intestazione
+st.markdown("<h1 style='text-align: center;'>💼 Dashboard PAC</h1>", unsafe_allow_html=True)
 
-# === Visualizzazione tabella operazioni ===
-st.markdown("### 📋 Operazioni registrate")
-st.dataframe(df)
+# ✅ Visualizzazione dei KPI in colonne
+col1, col2, col3 = st.columns(3)
+col1.metric("💰 Totale Investito", f"€{totale_investito:.2f}")
+col2.metric("📊 Valore Attuale", f"€{valore_attuale:.2f}")
+col3.metric("📈 Guadagno", f"€{guadagno:.2f}", delta=f"{(guadagno/totale_investito)*100:.2f}%" if totale_investito > 0 else "")
 
-# === Aggiunta manuale nuova operazione ===
-st.markdown("---")
-st.markdown("### ➕ Aggiungi operazione manualmente")
+# ✅ Grafico a torta per asset allocation
+st.subheader("📌 Allocazione Portafoglio")
+allocation = df.groupby("ETF")["Importo"].sum()
+fig1, ax1 = plt.subplots()
+ax1.pie(allocation, labels=allocation.index, autopct='%1.1f%%', startangle=90)
+ax1.axis('equal')
+st.pyplot(fig1)
 
-with st.form("aggiungi_operazione"):
-    data = st.date_input("Data")
-    etf = st.selectbox("ETF", list(etf_symbols.keys()))
-    importo = st.number_input("Importo Versato (€)", min_value=0.0, step=10.0)
-    prezzo = st.number_input("Prezzo Acquisto (€)", min_value=0.0, step=0.01)
-    quantita = st.number_input("Quantità Acquistata", min_value=0.0, step=0.01)
-    submit = st.form_submit_button("Aggiungi")
+# ✅ Grafico andamento temporale
+st.subheader("📈 Andamento PAC")
+df_andamento = df.groupby("Data")[["Importo", "Valore Attuale"]].sum().sort_index()
+fig2, ax2 = plt.subplots()
+df_andamento.plot(ax=ax2)
+st.pyplot(fig2)
 
-    if submit:
-        nuova_op = {
-            "Data": data.strftime("%Y-%m-%d"),
-            "ETF": etf,
-            "Importo Versato": importo,
-            "Prezzo Acquisto": prezzo,
-            "Quantità": quantita
-        }
-        df = pd.concat([df, pd.DataFrame([nuova_op])], ignore_index=True)
-        df.to_csv(csv_file, index=False)
-        st.success("✅ Operazione aggiunta con successo!")
-        st.experimental_rerun()
+# ✅ Obiettivi con progress bar
+st.subheader("🎯 Obiettivi")
+target_list = [100000, 250000, 500000]
+for target in target_list:
+    progress = min(valore_attuale / target, 1.0)
+    st.write(f"Target: €{target:,.0f}")
+    st.progress(progress)
+
+# ✅ Prezzi live ETF
+st.subheader("📢 Prezzi Live ETF")
+for nome, ticker in etf_info.items():
+    prezzo = prezzi_live.get(nome, 0.0)
+    st.markdown(f"**{nome}** – €{prezzo:.2f}")
+
+# ✅ Tabella operazioni registrate
+st.subheader("📋 Operazioni registrate")
+st.dataframe(df[["Data", "ETF", "Importo", "Prezzo", "Quantità"]].sort_values(by="Data"))
