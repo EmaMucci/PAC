@@ -1,89 +1,89 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
-import os
-import csv
+import plotly.express as px
 from datetime import datetime
-import plotly.graph_objects as go
 
-st.set_page_config(layout="wide", page_title="Dashboard PAC")
+st.set_page_config(page_title="Dashboard PAC", layout="wide", page_icon="📈")
 
-# --- Funzione per ottenere i prezzi live ---
-def get_live_prices(tickers):
-    prices = {}
-    for ticker in tickers:
-        try:
-            data = yf.Ticker(ticker).history(period="1d")
-            prices[ticker] = round(data["Close"].iloc[-1], 2)
-        except:
-            prices[ticker] = 0.0
-    return prices
+def load_data():
+    try:
+        return pd.read_csv("dati_pac.csv")
+    except FileNotFoundError:
+        return pd.DataFrame(columns=["Data", "ETF", "Versato", "Prezzo Acquisto", "Quantità"])
 
-# --- Percorso file CSV ---
-csv_file = "dati_pac.csv"
+def save_data(df):
+    df.to_csv("dati_pac.csv", index=False)
 
-# --- Inizializza il file CSV se non esiste ---
-if not os.path.exists(csv_file):
-    with open(csv_file, mode='w', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerow(["Data", "ETF", "Importo", "Prezzo", "Quantità"])
-
-# --- Carica i dati ---
-df = pd.read_csv(csv_file)
-df["Data"] = pd.to_datetime(df["Data"])
-
-# --- Prezzi live ---
-tickers_mapping = {
+# Simboli compatibili Yahoo Finance
+etf_mapping = {
     "SPY5L": "SPY5L.MI",
-    "SWDA.L": "SWDA.L",
-    "NSQE.DE": "NSQE.DE"
+    "SWDA": "SWDA.L",
+    "NSQE": "NSQE.DE"
 }
-prezzi_live = get_live_prices(tickers_mapping.values())
 
-# --- Calcolo valore attuale ---
-df["Valore Attuale"] = df.apply(
-    lambda row: row["Quantità"] * prezzi_live.get(tickers_mapping.get(row["ETF"], ""), 0.0),
-    axis=1
-)
+prezzi_live = {}
+for nome, ticker in etf_mapping.items():
+    try:
+        ticker_yf = yf.Ticker(ticker)
+        prezzo = ticker_yf.history(period="1d")["Close"].iloc[-1]
+        prezzi_live[nome] = round(prezzo, 2)
+    except:
+        prezzi_live[nome] = 0.0
 
-# --- KPI ---
-totale_investito = df["Importo"].sum()
-valore_attuale = df["Valore Attuale"].sum()
-guadagno = valore_attuale - totale_investito
+# Sidebar di navigazione
+pagina = st.sidebar.selectbox("Navigazione", ["Dashboard", "Aggiungi Operazione"])
 
-# --- HEADER ---
-st.markdown("### 📊 Dashboard PAC")
-col1, col2, col3 = st.columns(3)
-col1.metric("Totale Investito", f"€{totale_investito:.2f}")
-col2.metric("Valore Attuale", f"€{valore_attuale:.2f}")
-col3.metric("Guadagno", f"€{guadagno:.2f}", delta_color="inverse" if guadagno < 0 else "normal")
+if pagina == "Aggiungi Operazione":
+    st.title("➕ Aggiungi Operazione al PAC")
+    with st.form("form_op"):
+        data = st.date_input("Data", value=datetime.today())
+        etf = st.selectbox("ETF", list(etf_mapping.keys()))
+        versato = st.number_input("Importo Versato (€)", min_value=0.0, step=1.0)
+        prezzo = st.number_input("Prezzo di Acquisto", min_value=0.0, step=0.01)
+        quantita = st.number_input("Quantità", min_value=0.0, step=0.01)
+        submitted = st.form_submit_button("Aggiungi")
+        if submitted:
+            nuovo = pd.DataFrame([[data, etf, versato, prezzo, quantita]],
+                                 columns=["Data", "ETF", "Versato", "Prezzo Acquisto", "Quantità"])
+            df = load_data()
+            df = pd.concat([df, nuovo], ignore_index=True)
+            save_data(df)
+            st.success("✅ Operazione aggiunta!")
 
-# --- GRAFICO ---
-if not df.empty:
-    df_grouped = df.groupby(df["Data"].dt.strftime("%Y-%m"))[["Importo", "Valore Attuale"]].sum().reset_index()
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df_grouped["Data"], y=df_grouped["Importo"], name="Investito", line=dict(color="blue")))
-    fig.add_trace(go.Scatter(x=df_grouped["Data"], y=df_grouped["Valore Attuale"], name="Valore Attuale", fill='tozeroy', line=dict(color="green")))
-    fig.update_layout(title="Andamento PAC", xaxis_title="Data", yaxis_title="€", template="plotly_white")
-    st.plotly_chart(fig, use_container_width=True)
 else:
-    st.info("Nessuna operazione inserita ancora.")
+    st.title("📊 Dashboard PAC")
+    df = load_data()
 
-# --- PORTAFOGLIO ---
-st.markdown("### 📁 Profilo PAC")
-if not df.empty:
-    pac_summary = df.groupby("ETF")[["Importo", "Quantità"]].sum()
-    pac_summary["% Allocazione"] = (pac_summary["Importo"] / totale_investito) * 100
-    pac_summary["Prezzo Live"] = pac_summary.index.map(lambda x: prezzi_live.get(tickers_mapping.get(x, ""), 0.0))
-    st.dataframe(pac_summary[["% Allocazione", "Prezzo Live"]])
+    if df.empty:
+        st.warning("Non ci sono ancora dati. Aggiungi una operazione dal menu laterale.")
+        st.stop()
 
-    fig_alloc = go.Figure(data=[go.Pie(labels=pac_summary.index, values=pac_summary["% Allocazione"], hole=.4)])
-    fig_alloc.update_layout(title="Distribuzione Portafoglio")
-    st.plotly_chart(fig_alloc, use_container_width=True)
+    df["Valore Attuale"] = df.apply(lambda row: row["Quantità"] * prezzi_live.get(row["ETF"], 0.0), axis=1)
+    totale_investito = df["Versato"].sum()
+    valore_attuale = df["Valore Attuale"].sum()
+    profitto = valore_attuale - totale_investito
+    percentuale = (profitto / totale_investito * 100) if totale_investito else 0
 
-# --- OBIETTIVI ---
-st.markdown("### 🎯 Obiettivi")
-target_values = [100_000, 250_000, 500_000]
-for target in target_values:
-    progress = min(100, valore_attuale / target * 100)
-    st.progress(progress / 100, text=f"Obiettivo €{target:,.0f} - {progress:.2f}%")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("💰 Totale Investito", f"€ {totale_investito:,.2f}")
+    col2.metric("📈 Valore Attuale", f"€ {valore_attuale:,.2f}")
+    col3.metric("📊 Guadagno/Perdita", f"€ {profitto:,.2f}", f"{percentuale:.2f}%")
+
+    # Andamento temporale
+    df["Data"] = pd.to_datetime(df["Data"])
+    df_line = df.groupby(["Data", "ETF"])["Versato"].sum().reset_index()
+    fig1 = px.line(df_line, x="Data", y="Versato", color="ETF", title="Andamento Investimenti")
+    st.plotly_chart(fig1, use_container_width=True)
+
+    # Distribuzione ETF
+    df_pie = df.groupby("ETF")["Valore Attuale"].sum().reset_index()
+    fig2 = px.pie(df_pie, names="ETF", values="Valore Attuale", title="Distribuzione Portafoglio")
+    st.plotly_chart(fig2, use_container_width=True)
+
+    # Obiettivi dinamici
+    st.subheader("🎯 Obiettivi di lungo termine")
+    for target in [100_000, 250_000, 500_000]:
+        progress = min(valore_attuale / target, 1.0)
+        st.write(f"Obiettivo €{target:,.0f}")
+        st.progress(progress)
