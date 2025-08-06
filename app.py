@@ -1,95 +1,105 @@
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
-from datetime import datetime
+import requests
 
-st.set_page_config(layout="wide", page_title="Dashboard PAC")
+st.set_page_config(layout="wide", page_title="Dashboard PAC", initial_sidebar_state="collapsed")
 
-# === CONFIG ===
+# DARK MODE
+st.markdown("""
+    <style>
+        body {
+            background-color: #111111;
+            color: #f0f0f0;
+        }
+        .stProgress > div > div > div > div {
+            background-color: #00ccff;
+        }
+        .element-container {
+            padding: 10px;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
 ETF_LIST = [
-    {"symbol": "SPY5L", "name": "SPDR S&P 500", "color": "green"},
-    {"symbol": "SWDA.L", "name": "iShares MSCI World", "color": "blue"},
-    {"symbol": "NSQE.DE", "name": "iShares Nasdaq 100", "color": "red"}
+    {"symbol": "SPY5L", "tv_symbol": "SPY", "name": "SPDR S&P 500", "color": "#00ccff"},
+    {"symbol": "SWDA.L", "tv_symbol": "URTH", "name": "iShares MSCI World", "color": "#e67e22"},
+    {"symbol": "NSQE.DE", "tv_symbol": "QQQ", "name": "iShares Nasdaq 100", "color": "#9b59b6"}
 ]
 GOALS = [100_000, 250_000, 500_000]
 
-# === Simulazione prezzi live (sostituibile con API reali) ===
-def get_prices():
-    return {
-        "SPY5L": 630.09,
-        "SWDA.L": 88.45,
-        "NSQE.DE": 104.10
-    }
+@st.cache_data(ttl=60)
+def get_tradingview_price(symbol):
+    try:
+        r = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1m")
+        data = r.json()
+        price = data['chart']['result'][0]['meta']['regularMarketPrice']
+        return round(price, 2)
+    except:
+        return 0.0
 
-# === Caricamento dati
 data = pd.read_csv("dati_pac.csv")
 data['Data'] = pd.to_datetime(data['Data'], format='%Y-%m-%d')
 
-# === Prezzi
-prezzi = get_prices()
+# Preleva prezzi live
+prices = {etf['symbol']: get_tradingview_price(etf['tv_symbol']) for etf in ETF_LIST}
 
-# === Calcoli
-etf_status = []
-tot_investito = 0
-valore_attuale = 0
-
-for etf in ETF_LIST:
-    df = data[data['Simbolo'] == etf['symbol']]
-    quantità = df['Quantità'].sum()
-    investito = df['Totale Investito'].sum()
-    prezzo = prezzi[etf['symbol']]
-    valore = quantità * prezzo
-    guadagno = valore - investito
-    allocazione = investito / data['Totale Investito'].sum() * 100
-
-    etf_status.append({
-        **etf,
-        "quantità": quantità,
-        "investito": investito,
-        "valore": valore,
-        "guadagno": guadagno,
-        "allocazione": allocazione,
-        "prezzo": prezzo
-    })
-
-    tot_investito += investito
-    valore_attuale += valore
-
+tot_investito = data['Totale Investito'].sum()
+valore_attuale = sum(data[data['Simbolo']==etf['symbol']]['Quantità'].sum() * prices[etf['symbol']] for etf in ETF_LIST)
 guadagno_tot = valore_attuale - tot_investito
 
-# === Layout
-st.title("📊 Dashboard PAC")
-col1, col2, col3 = st.columns(3)
-col1.metric("💸 Totale Investito", f"€{tot_investito:,.2f}")
-col2.metric("📈 Valore Attuale", f"€{valore_attuale:,.2f}")
-col3.metric("📈 Guadagno", f"€{guadagno_tot:,.2f}", delta=f"{(guadagno_tot/tot_investito)*100:.2f}%" if tot_investito > 0 else "")
+# INTESTAZIONE
+st.markdown("<h1 style='color:#00ccff;'>📊 DASHBOARD PAC</h1>", unsafe_allow_html=True)
 
-# === Profilo PAC
-st.subheader("📘 Profilo PAC")
-for etf in etf_status:
-    st.markdown(
-        f"- **{etf['name']} ({etf['symbol']})** – Prezzo attuale: €{etf['prezzo']} – Allocazione: {etf['allocazione']:.2f}%"
-    )
+# KPI
+c1, c2, c3 = st.columns(3)
+c1.metric("💸 Totale Investito", f"€{tot_investito:,.2f}")
+c2.metric("📈 Valore Attuale", f"€{valore_attuale:,.2f}")
+c3.metric("📊 Guadagno", f"€{guadagno_tot:,.2f}", delta=f"{(guadagno_tot/tot_investito)*100:.2f}%")
 
-# === Grafico Allocazione
-st.subheader("📈 Allocazione ETF")
+# PROFILO PAC
+st.markdown("---")
+st.markdown("### 🧾 Profilo PAC")
+for etf in ETF_LIST:
+    alloc = (data[data['Simbolo']==etf['symbol']]['Totale Investito'].sum()) / tot_investito * 100
+    st.markdown(f"<b style='color:{etf['color']}'>{etf['name']} ({etf['symbol']})</b> — 💵 Prezzo live: €{prices[etf['symbol']]:.2f} — 🧮 Allocazione: {alloc:.1f}%", unsafe_allow_html=True)
+
+# GRAFICO ALLOCAZIONE
+st.markdown("---")
+st.markdown("### 📊 Allocazione ETF")
 fig1, ax1 = plt.subplots()
-ax1.pie([e['allocazione'] for e in etf_status], labels=[e['symbol'] for e in etf_status], autopct='%1.1f%%', colors=[e['color'] for e in etf_status])
+ax1.pie(
+    [ (data[data['Simbolo']==etf['symbol']]['Totale Investito'].sum()/tot_investito)*100 for etf in ETF_LIST ],
+    labels=[e['symbol'] for e in ETF_LIST], 
+    autopct='%1.1f%%', 
+    colors=[e['color'] for e in ETF_LIST]
+)
 ax1.axis("equal")
 st.pyplot(fig1)
 
-# === Andamento
-st.subheader("📆 Andamento nel tempo")
+# GRAFICO ANDAMENTO
+st.markdown("---")
+st.markdown("### 📈 Andamento cumulativo")
 fig2, ax2 = plt.subplots()
-for symbol in data['Simbolo'].unique():
-    df_etf = data[data['Simbolo'] == symbol].groupby('Data').sum().cumsum().reset_index()
-    ax2.plot(df_etf['Data'], df_etf['Totale Investito'], label=f"{symbol} Investito")
-ax2.set_title("Investimenti cumulativi")
+for etf in ETF_LIST:
+    df_e = data[data['Simbolo']==etf['symbol']].groupby('Data')['Totale Investito'].sum().cumsum()
+    ax2.plot(df_e.index, df_e.values, label=etf['symbol'], color=etf['color'])
+ax2.set_facecolor("#222222")
+fig2.patch.set_facecolor('#222222')
+ax2.set_title("Investito cumulato per ETF", color='white')
+ax2.tick_params(axis='x', colors='white')
+ax2.tick_params(axis='y', colors='white')
 ax2.legend()
 st.pyplot(fig2)
 
-# === Obiettivi
-st.subheader("🌟 Obiettivi PAC")
+# OBIETTIVI
+st.markdown("---")
+st.markdown("### 🎯 Obiettivi PAC")
 for goal in GOALS:
     perc = valore_attuale / goal * 100
-    st.progress(min(perc, 100), text=f"Progresso verso €{goal:,.0f}: {perc:.2f}%")
+    st.write(f"Progresso verso €{goal:,}: {perc:.1f}%")
+    st.progress(min(int(perc), 100))
+
+# AGGIORNAMENTO AUTOMATICO
+st.markdown("---")
+st.markdown("🔁 I dati si aggiornano automaticamente ogni 60 secondi.")
