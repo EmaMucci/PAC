@@ -87,3 +87,23 @@ else:
         progress = min(valore_attuale / target, 1.0)
         st.write(f"Obiettivo €{target:,.0f}")
         st.progress(progress)
+
+# === SEZIONE PREZZI LIVE ETF ===
+st.subheader("📊 Prezzi Live ETF")
+
+etf_symbols = {
+    "SPDR S&P 500 UCITS ETF": "SPY5L.MI",
+    "iShares Core MSCI World UCITS ETF": "SWDA.L",
+    "iShares NASDAQ 100 UCITS ETF EUR Hedged": "NSQE.DE"
+}
+
+cols = st.columns(3)
+
+for i, (nome, simbolo) in enumerate(etf_symbols.items()):
+    ticker = yf.Ticker(simbolo)
+    try:
+        prezzo = ticker.history(period="1d")["Close"].iloc[-1]
+    except:
+        prezzo = 0.0
+    with cols[i]:
+        st.metric(label=nome, value=f"{prezzo:.2f} €", delta="Live")
