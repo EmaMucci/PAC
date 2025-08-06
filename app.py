@@ -2,104 +2,102 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import requests
+from datetime import datetime
 
-st.set_page_config(layout="wide", page_title="Dashboard PAC", initial_sidebar_state="collapsed")
-
-# DARK MODE
-st.markdown("""
-    <style>
-        body {
-            background-color: #111111;
-            color: #f0f0f0;
-        }
-        .stProgress > div > div > div > div {
-            background-color: #00ccff;
-        }
-        .element-container {
-            padding: 10px;
-        }
-    </style>
-""", unsafe_allow_html=True)
-
-ETF_LIST = [
-    {"symbol": "SPY5L", "tv_symbol": "SPY", "name": "SPDR S&P 500", "color": "#00ccff"},
-    {"symbol": "SWDA.L", "tv_symbol": "URTH", "name": "iShares MSCI World", "color": "#e67e22"},
-    {"symbol": "NSQE.DE", "tv_symbol": "QQQ", "name": "iShares Nasdaq 100", "color": "#9b59b6"}
-]
-GOALS = [100_000, 250_000, 500_000]
-
-@st.cache_data(ttl=60)
-def get_tradingview_price(symbol):
+# === Funzioni utili ===
+@st.cache_data
+def load_data():
     try:
-        r = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1m")
-        data = r.json()
-        price = data['chart']['result'][0]['meta']['regularMarketPrice']
-        return round(price, 2)
+        return pd.read_csv("dati_pac.csv", parse_dates=["Data"])
+    except FileNotFoundError:
+        return pd.DataFrame(columns=["Data", "ETF", "Importo", "Prezzo", "Quantità"])
+
+def save_data(df):
+    df.to_csv("dati_pac.csv", index=False)
+
+def get_price_yahoo(symbol):
+    url = f"https://query1.finance.yahoo.com/v7/finance/quote?symbols={symbol}"
+    try:
+        response = requests.get(url).json()
+        return response["quoteResponse"]["result"][0]["regularMarketPrice"]
     except:
         return 0.0
 
-data = pd.read_csv("dati_pac.csv")
-data['Data'] = pd.to_datetime(data['Data'], format='%Y-%m-%d')
+# === UI Principale ===
+st.set_page_config(page_title="Dashboard PAC", layout="wide")
+st.title("📊 Dashboard PAC")
 
-# Preleva prezzi live
-prices = {etf['symbol']: get_tradingview_price(etf['tv_symbol']) for etf in ETF_LIST}
+# Menu di navigazione
+page = st.sidebar.radio("Vai a", ["Dashboard", "➕ Aggiungi Operazione"])
 
-tot_investito = data['Totale Investito'].sum()
-valore_attuale = sum(data[data['Simbolo']==etf['symbol']]['Quantità'].sum() * prices[etf['symbol']] for etf in ETF_LIST)
-guadagno_tot = valore_attuale - tot_investito
+# === Pagina: Aggiungi Operazione ===
+if page == "➕ Aggiungi Operazione":
+    st.header("➕ Inserisci un nuovo acquisto")
+    with st.form("inserimento_form"):
+        col1, col2 = st.columns(2)
+        with col1:
+            data = st.date_input("Data", value=datetime.today())
+            etf = st.selectbox("ETF", ["SPY5L.MI", "SWDA.L", "CSNDX.SW"])
+            prezzo = st.number_input("Prezzo di acquisto", min_value=0.0, step=0.01)
+        with col2:
+            importo = st.number_input("Importo versato (€)", min_value=0.0, step=1.0)
+            quantita = st.number_input("Quantità acquistata", min_value=0.0, step=0.01)
 
-# INTESTAZIONE
-st.markdown("<h1 style='color:#00ccff;'>📊 DASHBOARD PAC</h1>", unsafe_allow_html=True)
+        submitted = st.form_submit_button("Salva")
+        if submitted:
+            df = load_data()
+            nuova_riga = pd.DataFrame([{
+                "Data": data,
+                "ETF": etf,
+                "Importo": importo,
+                "Prezzo": prezzo,
+                "Quantità": quantita
+            }])
+            df = pd.concat([df, nuova_riga], ignore_index=True)
+            save_data(df)
+            st.success("✅ Operazione aggiunta con successo!")
 
-# KPI
-c1, c2, c3 = st.columns(3)
-c1.metric("💸 Totale Investito", f"€{tot_investito:,.2f}")
-c2.metric("📈 Valore Attuale", f"€{valore_attuale:,.2f}")
-c3.metric("📊 Guadagno", f"€{guadagno_tot:,.2f}", delta=f"{(guadagno_tot/tot_investito)*100:.2f}%")
+# === Pagina: Dashboard ===
+elif page == "Dashboard":
+    st.header("📈 Andamento PAC")
+    df = load_data()
 
-# PROFILO PAC
-st.markdown("---")
-st.markdown("### 🧾 Profilo PAC")
-for etf in ETF_LIST:
-    alloc = (data[data['Simbolo']==etf['symbol']]['Totale Investito'].sum()) / tot_investito * 100
-    st.markdown(f"<b style='color:{etf['color']}'>{etf['name']} ({etf['symbol']})</b> — 💵 Prezzo live: €{prices[etf['symbol']]:.2f} — 🧮 Allocazione: {alloc:.1f}%", unsafe_allow_html=True)
+    if df.empty:
+        st.info("Nessuna operazione inserita ancora.")
+    else:
+        # Prezzi live
+        prezzi_live = {
+            "SPY5L.MI": get_price_yahoo("SPY5L.MI"),
+            "SWDA.L": get_price_yahoo("SWDA.L"),
+            "CSNDX.SW": get_price_yahoo("CSNDX.SW")
+        }
 
-# GRAFICO ALLOCAZIONE
-st.markdown("---")
-st.markdown("### 📊 Allocazione ETF")
-fig1, ax1 = plt.subplots()
-ax1.pie(
-    [ (data[data['Simbolo']==etf['symbol']]['Totale Investito'].sum()/tot_investito)*100 for etf in ETF_LIST ],
-    labels=[e['symbol'] for e in ETF_LIST], 
-    autopct='%1.1f%%', 
-    colors=[e['color'] for e in ETF_LIST]
-)
-ax1.axis("equal")
-st.pyplot(fig1)
+        df["Valore Attuale"] = df.apply(lambda row: row["Quantità"] * prezzi_live.get(row["ETF"], 0.0), axis=1)
+        totale_investito = df["Importo"].sum()
+        valore_attuale = df["Valore Attuale"].sum()
+        guadagno = valore_attuale - totale_investito
+        rendimento = (guadagno / totale_investito) * 100 if totale_investito > 0 else 0
 
-# GRAFICO ANDAMENTO
-st.markdown("---")
-st.markdown("### 📈 Andamento cumulativo")
-fig2, ax2 = plt.subplots()
-for etf in ETF_LIST:
-    df_e = data[data['Simbolo']==etf['symbol']].groupby('Data')['Totale Investito'].sum().cumsum()
-    ax2.plot(df_e.index, df_e.values, label=etf['symbol'], color=etf['color'])
-ax2.set_facecolor("#222222")
-fig2.patch.set_facecolor('#222222')
-ax2.set_title("Investito cumulato per ETF", color='white')
-ax2.tick_params(axis='x', colors='white')
-ax2.tick_params(axis='y', colors='white')
-ax2.legend()
-st.pyplot(fig2)
+        # KPI
+        col1, col2, col3 = st.columns(3)
+        col1.metric("💰 Totale Investito", f"{totale_investito:,.2f} €")
+        col2.metric("📈 Valore Attuale", f"{valore_attuale:,.2f} €")
+        col3.metric("📊 Guadagno/Perdita", f"{guadagno:,.2f} €", f"{rendimento:.2f}%")
 
-# OBIETTIVI
-st.markdown("---")
-st.markdown("### 🎯 Obiettivi PAC")
-for goal in GOALS:
-    perc = valore_attuale / goal * 100
-    st.write(f"Progresso verso €{goal:,}: {perc:.1f}%")
-    st.progress(min(int(perc), 100))
+        # Obiettivi
+        st.markdown("### 🎯 Obiettivi PAC")
+        progress = valore_attuale
+        st.progress(min(progress / 100000, 1.0), text="Obiettivo 100K €")
+        st.progress(min(progress / 250000, 1.0), text="Obiettivo 250K €")
+        st.progress(min(progress / 500000, 1.0), text="Obiettivo 500K €")
 
-# AGGIORNAMENTO AUTOMATICO
-st.markdown("---")
-st.markdown("🔁 I dati si aggiornano automaticamente ogni 60 secondi.")
+        # Grafico allocazione
+        alloc = df.groupby("ETF")["Importo"].sum()
+        fig, ax = plt.subplots()
+        ax.pie(alloc, labels=alloc.index, autopct='%1.1f%%', startangle=90)
+        ax.axis("equal")
+        st.pyplot(fig)
+
+        # Storico operazioni
+        st.subheader("📜 Storico Operazioni")
+        st.dataframe(df.sort_values("Data", ascending=False), use_container_width=True)
